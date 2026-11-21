@@ -1,0 +1,67 @@
+name: Release
+
+# Push a tag like v0.1.0 to build executables for every platform and publish a
+# GitHub Release with them. "Run workflow" (manual) builds them as artifacts only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-latest,     name: macos-arm64,   test: true }
+          - { runner: macos-15-intel,   name: macos-x64,     test: true }
+          - { runner: ubuntu-latest,    name: linux-x64,     test: true }
+          - { runner: ubuntu-24.04-arm, name: linux-arm64,   test: false } # no Chrome preinstalled
+          - { runner: windows-latest,   name: windows-x64,   test: true, ext: .exe }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Check tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
+      - run: npm run build:exe
+      - name: Smoke test
+        shell: bash
+        run: ./release/strudel2wav-${{ matrix.name }}${{ matrix.ext }} --version
+      - name: End-to-end tests against the executable
+        if: matrix.test
+        shell: bash
+        env:
+          STRUDEL2WAV_EXE: release/strudel2wav-${{ matrix.name }}${{ matrix.ext }}
+        run: node --test test/e2e.test.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strudel2wav-${{ matrix.name }}
+          path: release/strudel2wav-${{ matrix.name }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release
+        run: sha256sum strudel2wav-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

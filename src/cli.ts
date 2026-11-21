@@ -2,7 +2,6 @@
 import { parseArgs } from 'node:util';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { FileCache, defaultCacheDir, download } from './cache.js';
 import { findBrowser, launch, runPass } from './browser.js';
@@ -37,17 +36,24 @@ Samples & network:
       --cache-dir <dir>     default ${defaultCacheDir()}
 
 Other:
-      --browser <path>      Chromium-based browser to use (default: auto-detect)
+      --browser <path>      Chrome/Chromium/Edge/Brave to use (default: auto-detect,
+                            or $STRUDEL2WAV_BROWSER)
       --max-polyphony <n>   default 128
   -v, --verbose             print Strudel log output
+      --version
   -h, --help
 `;
 
+declare const __VERSION__: string;
+const VERSION = typeof __VERSION__ === 'string' ? __VERSION__ : 'dev';
+
 const out = (s: string) => process.stderr.write(s + '\n');
 
+class CliError extends Error {}
+
+// Throws instead of exiting so `finally` blocks run (the browser must always be closed).
 function fail(msg: string): never {
-  out(`error: ${msg}`);
-  process.exit(1);
+  throw new CliError(msg);
 }
 
 function num(name: string, v: string | undefined, def?: number, min = 0): number | undefined {
@@ -97,6 +103,11 @@ async function askToFetch(urls: string[], mode: 'ask' | 'yes' | 'offline'): Prom
     fail('confirmation needed but stdin is not a terminal. Re-run with --yes to download or --offline to skip.');
   }
   const rl = createInterface({ input: process.stdin, output: process.stderr });
+  // Ctrl-C at the prompt: forward to the process handler, which closes the browser.
+  rl.on('SIGINT', () => {
+    rl.close();
+    process.emit('SIGINT');
+  });
   try {
     for (;;) {
       const a = (await rl.question('Download them? [y]es / [n]o, render without them / [l]ist all / [q]uit: ')).trim().toLowerCase();
@@ -163,10 +174,15 @@ async function main() {
       browser: { type: 'string' },
       'max-polyphony': { type: 'string' },
       verbose: { type: 'boolean', short: 'v' },
+      version: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
 
+  if (values.version) {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
   if (values.help) {
     process.stdout.write(HELP);
     return;
@@ -193,8 +209,13 @@ async function main() {
   const mode = values.yes ? 'yes' : values.offline ? 'offline' : 'ask';
 
   const cache = new FileCache(values['cache-dir'] ? resolve(values['cache-dir']) : defaultCacheDir());
-  const bundlePath = fileURLToPath(new URL('./renderer.js', import.meta.url));
   const browser = await launch(findBrowser(values.browser));
+  const onSignal = () => {
+    out('\ninterrupted');
+    browser.close().finally(() => process.exit(130));
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
   const log = (m: string) => values.verbose && out(m);
 
   const req: RenderRequest = {
@@ -216,10 +237,10 @@ async function main() {
     for (let round = 0; ; round++) {
       if (round > 8) fail('gave up resolving dependencies after 8 rounds');
       if (cycles !== undefined) req.seconds = 0.001; // need cps first; see below
-      let pass = await runPass(browser, bundlePath, cache, req, log);
+      let pass = await runPass(browser, cache, req, log);
       if (cycles !== undefined && pass.result.cps) {
         req.seconds = cycles / pass.result.cps;
-        pass = await runPass(browser, bundlePath, cache, req, log);
+        pass = await runPass(browser, cache, req, log);
       }
       const wanted = pass.missing.filter((u) => !skipped.has(u));
       if (!wanted.length) {
@@ -235,7 +256,7 @@ async function main() {
     // 2) Real render, everything served from the cache.
     out(`\nRendering ${req.seconds.toFixed(2)}s${tail ? ` + ${tail}s tail` : ''} at ${sampleRate} Hz...`);
     const t0 = performance.now();
-    const { result, channels } = await runPass(browser, bundlePath, cache, { ...req, dryRun: false }, log);
+    const { result, channels } = await runPass(browser, cache, { ...req, dryRun: false }, log);
     if (!result.ok || !channels) fail(`render failed: ${result.error ?? 'unknown error'}`);
     for (const l of result.logs) {
       if (values.verbose) out(`  ${l.message}`);
@@ -256,4 +277,7 @@ async function main() {
   }
 }
 
-main().catch((err) => fail(err?.message ?? String(err)));
+main().catch((err) => {
+  out(`error: ${err instanceof CliError ? err.message : (err?.message ?? String(err))}`);
+  process.exitCode = 1;
+});

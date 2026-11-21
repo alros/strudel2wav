@@ -9,12 +9,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeWav } from '../src/wav.ts';
 
-const CLI = new URL('../dist/cli.js', import.meta.url).pathname;
+import { fileURLToPath } from 'node:url';
+
+// Set STRUDEL2WAV_EXE to test a built standalone executable instead of dist/cli.cjs.
+const EXE = process.env.STRUDEL2WAV_EXE ? join(process.cwd(), process.env.STRUDEL2WAV_EXE) : undefined;
+const CLI = fileURLToPath(new URL('../dist/cli.cjs', import.meta.url));
 let dir, server, base, requests;
 
 function run(args, stdin = '') {
   return new Promise((resolve) => {
-    const child = execFile('node', [CLI, ...args], { cwd: dir }, (err, stdout, stderr) =>
+    const child = execFile(EXE ?? process.execPath, EXE ? args : [CLI, ...args], { cwd: dir }, (err, stdout, stderr) =>
       resolve({ code: err ? err.code : 0, stdout, stderr }),
     );
     child.stdin.end(stdin);
