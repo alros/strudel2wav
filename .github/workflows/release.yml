@@ -23,8 +23,8 @@ jobs:
           - { runner: windows-latest,   name: windows-x64,   test: true, ext: .exe }
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -43,7 +43,7 @@ jobs:
         env:
           STRUDEL2WAV_EXE: release/strudel2wav-${{ matrix.name }}${{ matrix.ext }}
         run: node --test test/e2e.test.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: strudel2wav-${{ matrix.name }}
           path: release/strudel2wav-${{ matrix.name }}${{ matrix.ext }}
@@ -54,7 +54,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true

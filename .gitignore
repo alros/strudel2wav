@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.wav
 release/
+
+# Overrides a global gitignore that excludes lock files: CI needs it for `npm ci` and caching.
+!package-lock.json
